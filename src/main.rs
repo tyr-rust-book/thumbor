@@ -1,9 +1,9 @@
 use anyhow::Result;
 use axum::{
-    extract::Path,
+    extract::{Path, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     routing::get,
-    Extension, Router,
+    Router,
 };
 use bytes::Bytes;
 use engine::{Engine, Photon};
@@ -19,8 +19,6 @@ use std::{
     sync::Arc,
 };
 use tokio::{net::TcpListener, sync::Mutex};
-use tower::ServiceBuilder;
-use tower_http::add_extension::AddExtensionLayer;
 use tracing::{info, instrument};
 
 // 引入 protobuf 生成的代码，我们暂且不用太关心他们
@@ -29,6 +27,8 @@ mod pb;
 
 use pb::*;
 
+type Cache = Arc<Mutex<LruCache<u64, Bytes>>>;
+
 // 参数使用 serde 做 Deserialize，axum 会自动识别并解析
 #[derive(Deserialize)]
 struct Params {
@@ -36,7 +36,10 @@ struct Params {
     url: String,
 }
 
-type Cache = Arc<Mutex<LruCache<u64, Bytes>>>;
+#[derive(Clone)]
+struct AppState {
+    cache: Cache,
+}
 
 #[tokio::main]
 async fn main() {
@@ -44,16 +47,13 @@ async fn main() {
     tracing_subscriber::fmt::init();
 
     let cache: Cache = Arc::new(Mutex::new(LruCache::new(NonZeroUsize::new(1024).unwrap())));
+    let app_state = AppState { cache };
 
     // 构建路由
     let app = Router::new()
         // `GET /image` 会执行 generate 函数，并把 spec 和 url 传递过去
         .route("/image/{spec}/{url}", get(generate))
-        .layer(
-            ServiceBuilder::new()
-                .layer(AddExtensionLayer::new(cache))
-                .into_inner(),
-        );
+        .with_state(app_state);
 
     print_test_url("https://images.pexels.com/photos/2470905/pexels-photo-2470905.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=750&w=1260");
 
@@ -68,8 +68,9 @@ async fn main() {
 
 async fn generate(
     Path(Params { spec, url }): Path<Params>,
-    Extension(cache): Extension<Cache>,
+    State(app_state): State<AppState>,
 ) -> Result<(HeaderMap, Vec<u8>), StatusCode> {
+    let cache = app_state.cache;
     let spec: ImageSpec = spec
         .as_str()
         .try_into()

@@ -25,7 +25,6 @@ tower = { version = "0.5", features = [
   "limit",
 ] } # 服务处理及中间件
 tower-http = { version = "0.6", features = [
-  "add-extension",
   "compression-full",
   "trace",
 ] } # http 中间件
